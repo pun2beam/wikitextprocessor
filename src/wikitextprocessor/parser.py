@@ -943,17 +943,28 @@ def text_fn(ctx: "Wtp", token: str) -> None:
                     node.children.append(token)
                     return
                 _parser_merge_str_children(ctx)
-                if (
-                    node.children
-                    and isinstance(node.children[-1], str)
-                    and (
-                        len(node.children) > 1
-                        or not node.children[-1].isspace()
-                    )
-                    and node.children[-1].endswith("\n")
-                ):
-                    _parser_pop(ctx, False)
-                    continue
+                if node.children and isinstance(node.children[-1], str):
+                    if len(node.children) == 1 and node.children[-1].isspace():
+                        pass
+                    else:
+                        trailing_newlines = 0
+                        idx = len(node.children) - 1
+                        while idx >= 0:
+                            child = node.children[idx]
+                            if not isinstance(child, str):
+                                break
+                            stripped = child.rstrip(" \t")
+                            without_newlines = stripped.rstrip("\n")
+                            trailing_newlines += len(stripped) - len(without_newlines)
+                            if trailing_newlines >= 2:
+                                break
+                            if without_newlines:
+                                break
+                            idx -= 1
+
+                        if trailing_newlines >= 2:
+                            _parser_pop(ctx, False)
+                            continue
             elif node.kind == NodeKind.LIST:
                 _parser_pop(ctx, False)
                 continue

@@ -228,6 +228,39 @@ dasfasddasfdas
         tree = self.parse("test", "{{x}<nowiki />}")
         self.assertEqual(tree.children, ["&lbrace;&lbrace;x&rbrace;&rbrace;"])
 
+    def test_subsense_examples_stay_nested(self):
+        text = """# {{lb|en|intransitive}}
+## To produce and deposit an egg or eggs.
+##* {{quote-book|passage=It lays well.}}
+##* {{quote-book|passage=It lays more.}}
+##* {{quote-book|passage=It lays again.}}
+##* {{quote-book|passage=It lays once more.}}
+##* {{quote-book|passage=It lays yet again.}}
+"""
+
+        tree = self.parse("lay", text)
+        outer_list = tree.children[0]
+        self.assertEqual(outer_list.kind, NodeKind.LIST)
+        wrapper_item = outer_list.children[0]
+        self.assertEqual(wrapper_item.kind, NodeKind.LIST_ITEM)
+        subsense_lists = [
+            child
+            for child in wrapper_item.children
+            if isinstance(child, WikiNode) and child.kind == NodeKind.LIST
+        ]
+        self.assertEqual(len(subsense_lists), 1)
+        subsense_item = subsense_lists[0].children[0]
+        self.assertEqual(subsense_item.kind, NodeKind.LIST_ITEM)
+        nested_lists = [
+            child
+            for child in subsense_item.children
+            if isinstance(child, WikiNode) and child.kind == NodeKind.LIST
+        ]
+        self.assertEqual(len(nested_lists), 1)
+        examples_list = nested_lists[0]
+        self.assertEqual(examples_list.kind, NodeKind.LIST)
+        self.assertEqual(len(examples_list.children), 5)
+
     def test_nowiki17(self):
         tree = self.parse("test", "{{x<nowiki />}}")
         self.assertEqual(
