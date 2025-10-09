@@ -80,6 +80,15 @@ Python's unittest framework help and options can be accessed through:
 python -m unittest -h
 ```
 
+### Debugging imports
+
+If you need to confirm that a local checkout of `wikitextprocessor` is the one
+being imported (for example, while testing `wiktextract`), set the environment
+variable `WTP_DEBUG_IMPORT=1` before running your script or CLI. When the
+package is imported, it will print a message showing the path of the
+`wikitextprocessor.__init__` module that was loaded along with the Python
+version.
+
 ### Obtaining WikiMedia dump files
 
 This package is primarily intended for processing Wiktionary and
