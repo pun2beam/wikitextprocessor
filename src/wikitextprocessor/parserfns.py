@@ -1178,72 +1178,105 @@ def format_with_wiki_timeformat(ctx: "Wtp", t: datetime, fmt: str) -> str:
     return t.strftime(fmt)
 
 
-def parse_timestamp(
-    ctx: "Wtp", fn_name: str, loc: str, dt: str
-) -> Union[datetime, str]:
-    orig_dt = dt
-    dt = re.sub(r"\+", " in ", dt)
+import re, logging
+from datetime import datetime, timedelta
+from typing import Union
+
+_MONTHS = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+    "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9,
+    "oct": 10, "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
+
+def _norm_month(s: str) -> int | None:
+    return _MONTHS.get(s.strip().lower().rstrip("."))
+
+# --- 各種日付パターン（前回のものを再統合） ---
+_RE_ISO_FULL   = re.compile(r"^\s*(\d{4})[-/\.](\d{1,2})[-/\.](\d{1,2})\s*$")
+_RE_FULL_DMY   = re.compile(r"^\s*(\d{1,2})\s+([A-Za-z\.]+)\s+(\d{4})\s*$")
+_RE_FULL_MDY   = re.compile(r"^\s*([A-Za-z\.]+)\s+(\d{1,2}),?\s+(\d{4})\s*$")
+_RE_FULL_YMDW  = re.compile(r"^\s*(\d{4})\s+([A-Za-z\.]+)\s+(\d{1,2})\s*$")
+_RE_YEAR_MONTH = re.compile(r"^\s*(\d{4})\s+([A-Za-z\.]+)\s*$")
+_RE_YEAR_ONLY  = re.compile(r"^\s*(\d{4})\s*$")
+
+# --- 新規: 相対加算式 ---
+_RE_RELATIVE = re.compile(
+    r"^(?P<base>[^+]+?)\s*([+])\s*(?P<num>\d+)\s*(?P<unit>day|month|year)s?\s*$",
+    re.I
+)
+
+def parse_timestamp(ctx: "Wtp", fn_name: str, loc: str, dt: str) -> Union[str, datetime]:
     if not dt:
-        dt = "now"
+        return dt
+    s = dt.strip()
 
-    settings: dateparser._Settings = {"RETURN_AS_TIMEZONE_AWARE": True}
-    if loc in ("", "0"):
-        dt += " UTC"
+    # ---------- 相対構文の処理 ----------
+    if m := _RE_RELATIVE.match(s):
+        base_str = m.group("base").strip()
+        num = int(m.group("num"))
+        unit = m.group("unit").lower()
 
-    t: Optional[datetime]
-    if dt.startswith("@"):
-        try:
-            return datetime.fromtimestamp(float(dt[1:]))
-        except ValueError:
-            ctx.warning(
-                "bad time syntax in {}: {!r}".format(fn_name, orig_dt),
-                sortid="parserfns/1032",
-            )
-            return '<strong class="error">Bad time syntax: {}</strong>'.format(
-                html.escape(orig_dt)
-            )
-    else:
-        # dateparser doesn't have the exact same behavior as
-        # php's strtotime() (which is the original function used)
-        # but we can handle special cases here and hope
-        # people on wiktionary don't go crazy with weird formatting
-        t = dateparser.parse(dt, settings=settings)
-        if t is None:
-            m = re.match(
-                r"([^+]*)\s*(\+\s*\d+\s*(day|year|month)s?)\s*$", orig_dt
-            )
-            if m:
-                main_date = dateparser.parse(m.group(1), settings=settings)
-                add_time = dateparser.parse(m.group(2), settings=settings)
-                now = dateparser.parse("now", settings=settings)
-                if main_date and add_time is not None and now is not None:
-                    # this is just a kludge: dateparser parses "+2 days" as
-                    # "2 days AGO". The now-datetime object is used to check
-                    # just in case which way the parsing goes (we're relying
-                    # on the "+" in the original argument string).
-                    # Couldn't figure out a way to get a delta value other
-                    # than doing this; didn't even have to round anything,
-                    # things seem to work out at these small timescales.
-                    if add_time < now:
-                        delta = now - add_time
-                    else:
-                        delta = add_time - now
-                    t = main_date + delta
-        if t is None and orig_dt.isdecimal() and len(orig_dt) == 14:
-            # could be MediaWiki timestamp
-            try:
-                t = datetime.strptime(orig_dt, MEDIAWIKI_TIMESTAMP_FORMAT)
-            except ValueError:
-                pass
-        if t is None:
-            ctx.warning(
-                "unrecognized time syntax in {}: {!r}".format(fn_name, orig_dt),
-                sortid="parserfns/1040",
-            )
-            return '<strong class="error">Bad time syntax: {}</strong>'.format(
-                html.escape(orig_dt)
-            )
-    return t
+        base_val = parse_timestamp(ctx, fn_name, loc, base_str)
+        if isinstance(base_val, str):
+            # 再帰結果が文字列なら datetime へ変換（粒度に応じて仮の01補完）
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", base_val):
+                base_dt = datetime.strptime(base_val, "%Y-%m-%d")
+            elif re.fullmatch(r"\d{4}-\d{2}", base_val):
+                base_dt = datetime.strptime(base_val + "-01", "%Y-%m-%d")
+            elif re.fullmatch(r"\d{4}", base_val):
+                base_dt = datetime.strptime(base_val + "-01-01", "%Y-%m-%d")
+            else:
+                logging.warning("[parse_timestamp] cannot parse base part %r", base_str)
+                return dt
+        else:
+            base_dt = base_val
+
+        if unit.startswith("day"):
+            result = base_dt + timedelta(days=num)
+        elif unit.startswith("month"):
+            y = base_dt.year
+            m = base_dt.month + num
+            y += (m - 1) // 12
+            m = ((m - 1) % 12) + 1
+            result = base_dt.replace(year=y, month=m)
+        elif unit.startswith("year"):
+            result = base_dt.replace(year=base_dt.year + num)
+        else:
+            logging.warning("[parse_timestamp] unknown unit %r", unit)
+            return dt
+        return result.strftime("%Y-%m-%d")
+
+    # ---------- 通常のパターン群 ----------
+    if m := _RE_ISO_FULL.match(s):
+        return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+
+    if m := _RE_FULL_DMY.match(s):  # 9 May 1999
+        mon = _norm_month(m.group(2))
+        if mon:
+            return f"{int(m.group(3)):04d}-{mon:02d}-{int(m.group(1)):02d}"
+
+    if m := _RE_FULL_MDY.match(s):  # May 9, 1999
+        mon = _norm_month(m.group(1))
+        if mon:
+            return f"{int(m.group(3)):04d}-{mon:02d}-{int(m.group(2)):02d}"
+
+    if m := _RE_FULL_YMDW.match(s):  # 1999 May 9
+        mon = _norm_month(m.group(2))
+        if mon:
+            return f"{int(m.group(1)):04d}-{mon:02d}-{int(m.group(3)):02d}"
+
+    if m := _RE_YEAR_MONTH.match(s):  # 1999 May
+        mon = _norm_month(m.group(2))
+        if mon:
+            return f"{int(m.group(1)):04d}-{mon:02d}"
+
+    if m := _RE_YEAR_ONLY.match(s):  # 1999
+        return f"{int(m.group(1)):04d}"
+
+    logging.warning("[parse_timestamp] unrecognized date: %r fn=%s loc=%s", dt, fn_name, loc)
+    return dt
+
 
 
 def time_fn(
